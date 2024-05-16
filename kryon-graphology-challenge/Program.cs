@@ -49,7 +49,7 @@ namespace kryon_graphology_challenge
         {
             Console.WriteLine($"\nReading challenge file {path}...\n");
             var result = await HandwritingAnalyzer.ReadHandwrittenTextAsync($"./Image-files/{path}", httpClient);
-            Console.WriteLine(result.ToString());
+            Console.WriteLine(result?.ToString());
         }
     }
 }
