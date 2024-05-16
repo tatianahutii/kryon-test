@@ -9,8 +9,9 @@ namespace kryongraphologychallenge.Helpers
 {
     public class HandwritingAnalyzer
     {
-        const string subscriptionKey = "d8c4e756cb844352a0ca8c58ff96b3ec";
-        const string uriBase = "https://cai-ntx-test-kyron-wu2.cognitiveservices.azure.com/vision/v2.0/read/core/asyncBatchAnalyze";
+        private const int NUMBER_OF_RETRY = 10;
+        private const int DELAY = 1000;
+
 
         public HandwritingAnalyzer()
         {
@@ -22,96 +23,64 @@ namespace kryongraphologychallenge.Helpers
         /// </summary>
         /// <param name="imageFilePath">The image file with handwritten text.</param>
 
-        public static async Task<JToken> ReadHandwrittenText(string imageFilePath)
+        public static async Task<JToken> ReadHandwrittenTextAsync(string imageFilePath, HttpClient httpClient)
         {
             try
             {
-                HttpClient client = new HttpClient();
-
-                // Request headers.
-                client.DefaultRequestHeaders.Add(
-                    "Ocp-Apim-Subscription-Key", subscriptionKey);
-
-                // Assemble the URI for the REST API method.
-                string uri = uriBase;
-
-                HttpResponseMessage response;
-
-                // Two REST API methods are required to extract handwritten text.
-                // One method to submit the image for processing, the other method
-                // to retrieve the text found in the image.
-
-                // operationLocation stores the URI of the second REST API method,
-                // returned by the first REST API method.
-                string operationLocation;
-
-                // Reads the contents of the specified local image
-                // into a byte array.
                 byte[] byteData = ImageUtil.GetImageAsByteArray(imageFilePath);
+                var response = await GetOperationLocation(byteData, httpClient);
 
-                // Adds the byte array as an octet stream to the request body.
-                using (ByteArrayContent content = new ByteArrayContent(byteData))
+                if (!response.IsSuccessStatusCode)
                 {
-                    // This example uses the "application/octet-stream" content type.
-                    // The other content types you can use are "application/json"
-                    // and "multipart/form-data".
-                    content.Headers.ContentType =
-                        new MediaTypeHeaderValue("application/octet-stream");
-
-                    // The first REST API method, Batch Read, starts
-                    // the async process to analyze the written text in the image.
-                    response = await client.PostAsync(uri, content);
-                }
-
-                // The response header for the Batch Read method contains the URI
-                // of the second method, Read Operation Result, which
-                // returns the results of the process in the response body.
-                // The Batch Read operation does not return anything in the response body.
-                if (response.IsSuccessStatusCode)
-                    operationLocation =
-                        response.Headers.GetValues("Operation-Location").FirstOrDefault();
-                else
-                {
-                    // Display the JSON error data.
                     string errorString = await response.Content.ReadAsStringAsync();
                     JToken responseObj = JToken.Parse(errorString);
 
-                    return null;
+                    return responseObj;
                 }
 
-                // If the first REST API method completes successfully, the second 
-                // REST API method retrieves the text written in the image.
-                //
-                // Note: The response may not be immediately available. Handwriting
-                // recognition is an asynchronous operation that can take a variable
-                // amount of time depending on the length of the handwritten text.
-                // You may need to wait or retry this operation.
-                //
-                // This example checks once per second for ten seconds.
-                string contentString;
-                int i = 0;
-                do
-                {
-                    System.Threading.Thread.Sleep(1000);
-                    response = await client.GetAsync(operationLocation);
-                    contentString = await response.Content.ReadAsStringAsync();
-                    ++i;
-                }
-                while (i < 10 && contentString.IndexOf("\"status\":\"Succeeded\"", StringComparison.Ordinal) == -1);
+                var operationLocation = response.Headers
+                    .GetValues("Operation-Location")
+                    .FirstOrDefault();
 
-                if (i == 10 && contentString.IndexOf("\"status\":\"Succeeded\"", StringComparison.Ordinal) == -1)
+                var result = await GetImageText(httpClient, operationLocation);
+
+                if (result is null)
                 {
                     Console.WriteLine("\nTimeout error.\n");
-                    return null;
                 }
 
-                return JToken.Parse(contentString);
+                return result;
+
             }
             catch (Exception e)
             {
                 Console.WriteLine("\n" + e.Message);
                 return null;
             }
+        }
+
+        private static async Task<HttpResponseMessage> GetOperationLocation(byte[] byteData, HttpClient _httpClient)
+        {
+            using var content = new ByteArrayContent(byteData);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            return await _httpClient.PostAsync(string.Empty, content);
+        }
+
+        private static async Task<JToken> GetImageText(HttpClient httpClient, string operationLocation)
+        {
+            for (int i = 0; i < NUMBER_OF_RETRY; i++)
+            {
+                await Task.Delay(DELAY);
+                var response = await httpClient.GetAsync(operationLocation);
+                var contentString = await response.Content.ReadAsStringAsync();
+
+                if (contentString.Contains("\"status\":\"Succeeded\"", StringComparison.Ordinal))
+                {
+                    return JToken.Parse(contentString);
+                }
+            }
+
+            return null;
         }
     }
 }
